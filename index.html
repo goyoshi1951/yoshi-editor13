@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>yoshiエディター v13</title>
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#eee;font-family:"Yu Mincho","Hiragino Mincho ProN",serif}
+#bar{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #bbb;padding:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+button{font-size:16px;padding:7px 11px;cursor:pointer}
+#status{font-size:13px;color:#555}
+#paper{width:210mm;min-height:297mm;margin:15px auto;background:#fff;padding:25mm 10mm 25mm;box-shadow:0 1px 7px #aaa;position:relative}
+.header{position:absolute;top:5mm;right:10mm;font-size:10pt;white-space:nowrap}
+#editor{display:block;width:100%;min-height:247mm;border:0;outline:0;resize:vertical;overflow:auto;font-family:"Yu Mincho","Hiragino Mincho ProN",serif;font-size:13pt;line-height:1;white-space:pre-wrap;overflow-wrap:anywhere}
+#printArea{display:none}
+@page{size:A4;margin:25mm 10mm 25mm}
+@media print{
+ #bar,#paper{display:none!important}
+ #printArea{display:block!important}
+ .printPage{width:190mm;height:247mm;position:relative;page-break-after:always;break-after:page;font-family:"Yu Mincho","Hiragino Mincho ProN",serif;font-size:13pt;line-height:1;overflow:hidden}
+ .printPage:last-child{page-break-after:auto;break-after:auto}
+ .printHeader{position:absolute;top:-31mm;right:0;font-size:10pt;line-height:5mm;white-space:nowrap}
+ .lines{position:absolute;top:0;left:0;width:100%}
+ .line{height:7.9mm;line-height:7.9mm;white-space:nowrap;overflow:hidden}
+}
+@media(max-width:800px){
+ #paper{width:100%;min-height:100vh;margin:0;box-shadow:none}
+ #editor{min-height:calc(100vh - 60mm)}
+ #status{width:100%}
+}
+</style>
+</head>
+<body>
+<div id="bar">
+<button id="new">新規</button>
+<button id="openTxt">TXTを開く</button>
+<button id="openDocx">DOCXを開く</button>
+<button id="saveTxt">TXTで保存</button>
+<button id="saveDocx">DOCXで保存</button>
+<button id="print">印刷</button>
+<span>明朝13pt｜A4｜左右1cm｜上2.5cm｜下2.5cm｜30行｜全角40文字｜ヘッダー10pt</span>
+<span id="status"></span>
+</div>
+<div id="paper">
+<div class="header">yoshiエディター v13</div>
+<textarea id="editor" spellcheck="false" placeholder="ここに文章を入力・貼り付けしてください。"></textarea>
+</div>
+<div id="printArea"></div>
+<input id="fileTxt" type="file" accept=".txt" hidden>
+<input id="fileDocx" type="file" accept=".docx" hidden>
+<script>
+"use strict";
+const editor=document.getElementById("editor"),status=document.getElementById("status"),printArea=document.getElementById("printArea");
+let currentName="document";
+function charWidth(c){return /[\u0000-\u00ff]/.test(c)?1:2}
+function makeLines(){
+ const out=[];
+ for(const row of editor.value.replace(/\r\n/g,"\n").split("\n")){
+  if(row===""){out.push("");continue}
+  let s="",w=0;
+  for(const c of row){const n=charWidth(c);if(s&&w+n>80){out.push(s);s="";w=0}s+=c;w+=n}
+  out.push(s)
+ }
+ return out.length?out:[""]
+}
+function update(){status.textContent="約"+Math.max(1,Math.ceil(makeLines().length/30))+"ページ"}
+editor.oninput=update;
+document.getElementById("new").onclick=()=>{if(editor.value&&!confirm("現在の文章を消去しますか？"))return;editor.value="";currentName="document";update();editor.focus()};
+document.getElementById("openTxt").onclick=()=>document.getElementById("fileTxt").click();
+document.getElementById("openDocx").onclick=()=>document.getElementById("fileDocx").click();
+document.getElementById("fileTxt").onchange=async function(){const f=this.files[0];if(!f)return;try{editor.value=await f.text();currentName=f.name.replace(/\.[^.]+$/,"");update()}catch(e){alert("TXT読み込みエラー：\n"+e.message)}this.value=""};
+function download(blob,filename){const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
+document.getElementById("saveTxt").onclick=()=>download(new Blob([editor.value],{type:"text/plain;charset=utf-8"}),currentName+".txt");
+
+/* ZIP / DEFLATE support for ordinary DOCX files, implemented with the browser
+   Compression Streams API. DOCX is an Open XML ZIP package. */
+const te=new TextEncoder(),td=new TextDecoder("utf-8");
+const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+const u16=n=>new Uint8Array([n&255,(n>>>8)&255]),u32=n=>new Uint8Array([n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255]);
+function cat(...a){let n=a.reduce((s,x)=>s+x.length,0),o=new Uint8Array(n),p=0;for(const x of a){o.set(x,p);p+=x.length}return o}
+const crcTable=(()=>{const t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?(0xedb88320^(c>>>1)):(c>>>1);t[n]=c>>>0}return t})();
+function crc32(a){let c=0xffffffff;for(const b of a)c=crcTable[(c^b)&255]^(c>>>8);return(c^0xffffffff)>>>0}
+async function deflateRaw(data){
+ if(!("CompressionStream" in window)) throw Error("このブラウザはDOCX圧縮機能に対応していません。ChromeまたはSafariの最新版をご利用ください。");
+ const cs=new CompressionStream("deflate-raw"),w=cs.writable.getWriter();w.write(data);w.close();
+ return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+async function inflateRaw(data){
+ if(!("DecompressionStream" in window)) throw Error("このブラウザはDOCX解凍機能に対応していません。ChromeまたはSafariの最新版をご利用ください。");
+ const ds=new DecompressionStream("deflate-raw"),w=ds.writable.getWriter();w.write(data);w.close();
+ return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+async function makeZip(files){
+ let local=[],central=[],offset=0;
+ for(const [name,data] of files){
+  const nb=te.encode(name),compressed=await deflateRaw(data),c=crc32(data);
+  const lh=cat(new Uint8Array([80,75,3,4]),u16(20),u16(0),u16(8),u16(0),u16(0),u32(c),u32(compressed.length),u32(data.length),u16(nb.length),u16(0),nb,compressed);
+  local.push(lh);
+  central.push(cat(new Uint8Array([80,75,1,2]),u16(20),u16(20),u16(0),u16(8),u16(0),u16(0),u32(c),u32(compressed.length),u32(data.length),u16(nb.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(offset),nb));
+  offset+=lh.length;
+ }
+ const body=cat(...local),cd=cat(...central);
+ const end=cat(new Uint8Array([80,75,5,6]),u16(0),u16(0),u16(files.length),u16(files.length),u32(cd.length),u32(body.length),u16(0));
+ return new Blob([body,cd,end],{type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+}
+async function makeDocx(){
+ const paras=editor.value.replace(/\r\n/g,"\n").split("\n").map(s=>
+ '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Yu Mincho" w:eastAsia="Yu Mincho"/><w:sz w:val="26"/></w:rPr><w:t xml:space="preserve">'+esc(s)+'</w:t></w:r></w:p>').join("");
+ const doc='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'+paras+'<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1985" w:right="567" w:bottom="1418" w:left="567"/></w:sectPr></w:body></w:document>';
+ const ct='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>';
+ const rel='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>';
+ const app='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>yoshiエディター</Application></Properties>';
+ return makeZip([["[Content_Types].xml",te.encode(ct)],["_rels/.rels",te.encode(rel)],["docProps/app.xml",te.encode(app)],["word/document.xml",te.encode(doc)]]);
+}
+document.getElementById("saveDocx").onclick=async()=>{try{download(await makeDocx(),currentName+".docx")}catch(e){alert("DOCX保存エラー：\n"+e.message)}};
+
+function xmlText(xml){
+ xml=xml.replace(/<w:tab[^>]*\/>/g,"\t").replace(/<w:br[^>]*\/>/g,"\n").replace(/<\/w:p>/g,"\n");
+ const raw=xml.replace(/<[^>]+>/g,""),ta=document.createElement("textarea");ta.innerHTML=raw;
+ return ta.value.replace(/\n$/,"");
+}
+async function readDocx(file){
+ const b=new Uint8Array(await file.arrayBuffer()),dv=new DataView(b.buffer);
+ let eocd=-1;
+ for(let i=b.length-22;i>=Math.max(0,b.length-70000);i--){if(dv.getUint32(i,true)===0x06054b50){eocd=i;break}}
+ if(eocd<0)throw Error("DOCXのZIP構造を読み取れません。");
+ const cdSize=dv.getUint32(eocd+12,true),cdOffset=dv.getUint32(eocd+16,true);
+ let p=cdOffset,end=cdOffset+cdSize;
+ while(p<end){
+  if(dv.getUint32(p,true)!==0x02014b50)throw Error("DOCXの中央目録を読み取れません。");
+  const method=dv.getUint16(p+10,true),csize=dv.getUint32(p+20,true),n=dv.getUint16(p+28,true),x=dv.getUint16(p+30,true),c=dv.getUint16(p+32,true),localOffset=dv.getUint32(p+42,true);
+  const name=td.decode(b.slice(p+46,p+46+n));
+  if(name==="word/document.xml"){
+   const lp=localOffset;
+   if(dv.getUint32(lp,true)!==0x04034b50)throw Error("DOCX本文の位置を確認できません。");
+   const ln=dv.getUint16(lp+26,true),lx=dv.getUint16(lp+28,true),start=lp+30+ln+lx;
+   const raw=b.slice(start,start+csize);
+   const data=method===0?raw:method===8?await inflateRaw(raw):null;
+   if(!data)throw Error("このDOCXの圧縮方式には対応していません。");
+   return xmlText(td.decode(data));
+  }
+  p+=46+n+x+c;
+ }
+ throw Error("DOCX本文が見つかりません。");
+}
+document.getElementById("fileDocx").onchange=async function(){
+ const f=this.files[0];if(!f)return;
+ try{editor.value=await readDocx(f);currentName=f.name.replace(/\.[^.]+$/,"");update()}
+ catch(e){alert("DOCX読み込みエラー：\n"+e.message)}
+ this.value=""
+};
+
+document.getElementById("print").onclick=()=>{
+ printArea.innerHTML="";
+ const a=makeLines();
+ for(let i=0;i<a.length;i+=30){
+  const page=document.createElement("div");
+  page.className="printPage";
+  page.style.paddingTop="0";
+
+  const h=document.createElement("div");
+  h.className="printHeader";
+  h.textContent="yoshiエディター v13";
+  h.style.position="absolute";
+  h.style.top="0";
+  h.style.right="0";
+  page.appendChild(h);
+
+  const box=document.createElement("div");
+  box.className="lines";
+  box.style.top="8mm";
+  for(const text of a.slice(i,i+30)){
+    const line=document.createElement("div");
+    line.className="line";
+    line.textContent=text||" ";
+    box.appendChild(line)
+  }
+  page.appendChild(box);
+  printArea.appendChild(page)
+ }
+ setTimeout(()=>window.print(),150)
+};
+update();
+</script>
+</body>
+</html>
