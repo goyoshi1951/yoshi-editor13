@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>yoshiエディター v13</title>
+<title>yoshiエディター v14</title>
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.json">
@@ -41,12 +41,14 @@ button{font-size:16px;padding:7px 11px;cursor:pointer}
 <button id="openDocx">DOCXを開く</button>
 <button id="saveTxt">TXTで保存</button>
 <button id="saveDocx">DOCXで保存</button>
+<button id="saveAs">名前を付けて保存</button>
 <button id="print">印刷</button>
+<button id="exit">終了</button>
 <span>明朝13pt｜A4｜左右1cm｜上2.5cm｜下2.5cm｜30行｜全角40文字｜ヘッダー10pt</span>
 <span id="status"></span>
 </div>
 <div id="paper">
-<div class="header">yoshiエディター v13</div>
+<div class="header">yoshiエディター v14</div>
 <textarea id="editor" spellcheck="false" placeholder="ここに文章を入力・貼り付けしてください。"></textarea>
 </div>
 <div id="printArea"></div>
@@ -75,6 +77,43 @@ document.getElementById("openDocx").onclick=()=>document.getElementById("fileDoc
 document.getElementById("fileTxt").onchange=async function(){const f=this.files[0];if(!f)return;try{editor.value=await f.text();currentName=f.name.replace(/\.[^.]+$/,"");update()}catch(e){alert("TXT読み込みエラー：\n"+e.message)}this.value=""};
 function download(blob,filename){const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
 document.getElementById("saveTxt").onclick=()=>download(new Blob([editor.value],{type:"text/plain;charset=utf-8"}),currentName+".txt");
+function askFileName(){
+ const suggested=currentName&&currentName!=="document"?currentName:"無題";
+ let name=prompt("保存するファイル名を入力してください（拡張子は不要です）",suggested);
+ if(name===null)return null;
+ name=name.trim().replace(/[\\/:*?"<>|]/g,"_");
+ if(!name)name="無題";
+ return name;
+}
+document.getElementById("saveAs").onclick=async()=>{
+ const name=askFileName();
+ if(!name)return;
+ const choice=prompt("保存形式を入力してください：TXT または DOCX","TXT");
+ if(choice===null)return;
+ const fmt=choice.trim().toUpperCase();
+ try{
+   if(fmt==="DOCX"){
+     download(await makeDocx(),name+".docx");
+   }else if(fmt==="TXT"){
+     download(new Blob([editor.value],{type:"text/plain;charset=utf-8"}),name+".txt");
+   }else{
+     alert("TXT または DOCX と入力してください。");
+     return;
+   }
+   currentName=name;
+   status.textContent="保存しました："+name+"."+fmt.toLowerCase();
+ }catch(e){alert("名前を付けて保存できませんでした：\n"+e.message)}
+};
+
+document.getElementById("exit").onclick=()=>{
+ if(confirm("yoshiエディターを終了しますか？")){
+   window.close();
+   setTimeout(()=>{
+     alert("この画面は自動で閉じられない場合があります。\nその場合は、ウィンドウの閉じるボタンで終了してください。");
+   },200);
+ }
+};
+
 
 /* ZIP / DEFLATE support for ordinary DOCX files, implemented with the browser
    Compression Streams API. DOCX is an Open XML ZIP package. */
@@ -164,7 +203,7 @@ document.getElementById("print").onclick=()=>{
 
   const h=document.createElement("div");
   h.className="printHeader";
-  h.textContent="yoshiエディター v13";
+  h.textContent="yoshiエディター v14";
   h.style.position="absolute";
   h.style.top="0";
   h.style.right="0";
